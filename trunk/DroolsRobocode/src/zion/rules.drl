@@ -1,0 +1,151 @@
+package zion
+
+import zion.*;
+import robocode.*;
+import robocode.ScannedRobotEvent;
+
+
+query "query"
+  accion: Accion()
+end
+
+declare Victima
+   nombre: String
+   x: double
+   y: double
+   distancia: double
+end
+
+rule "Priorizar a›es"
+dialect "mvel"
+when
+	$accion1: Accion($tipo: tipo, $prioridad1: prioridad)
+	$accion2: Accion(tipo==$tipo, $prioridad2: prioridad)
+	eval ($prioridad1 > $prioridad2)
+then
+    retract($accion2);      
+    System.out.println("Regra 1");
+end
+
+rule "Sem ver nenhum rob™, mover o radar"
+when
+	not (exists ScannedRobotEvent())
+then
+	insert (new Accion(Accion.GIRAR_RADAR_DER, 360, 1));
+	System.out.println("Regra 2");
+end
+
+rule "Parado e sem alvo, mover aleatoriamente"
+when
+  EstadoRobot( distanceRemaining == 0 )
+  not (exists Victima())
+  $batalla: EstadoBatalla()
+then
+  insert(new Accion(Accion.GIRAR_RADAR_DER, 360, 1));
+  insert(new Accion(Accion.GIRAR_TANQUE_DER, (360*Math.random() - 180), 1));
+  insert(new Accion(Accion.GIRAR_CANON_DER, (360*Math.random() - 180), 1));
+  double avance = Math.min($batalla.getAnchoCampo(), $batalla.getAltoCampo())*Math.random();
+  insert(new Accion(Accion.AVANZAR, avance, 1));
+  System.out.println("Regra 3");
+end
+
+rule "Alvo detectado"
+   when
+      $datosVictima: Victima ($nombreVictima: nombre)
+      $status : EstadoRobot()
+      $victimaEscaneada: ScannedRobotEvent(name == $nombreVictima)
+   then
+      double anguloAbsoluto = Auxiliar.anguloAbsoluto($status.getHeading(), $victimaEscaneada.getBearing());
+      $datosVictima.setX(Auxiliar.calcularX($status.getX(), anguloAbsoluto, $victimaEscaneada.getDistance()));                                            
+      $datosVictima.setY(Auxiliar.calcularX($status.getY(), anguloAbsoluto, $victimaEscaneada.getDistance()));
+      $datosVictima.setDistancia($victimaEscaneada.getDistance());
+      
+      insert(new Accion(Accion.GIRAR_TANQUE_DER, $victimaEscaneada.getBearing(), 1));
+      double anguloRelativoCanon = Auxiliar.anguloRelativo($status.getHeading(), $status.getGunHeading());  
+      insert(new Accion(Accion.GIRAR_CANON_DER, ($victimaEscaneada.getBearing() - anguloRelativoCanon), 1));
+      double anguloRelativoRadar =  Auxiliar.anguloRelativo($status.getHeading(), $status.getRadarHeading());  
+      insert(new Accion(Accion.GIRAR_RADAR_DER, ($victimaEscaneada.getBearing() - anguloRelativoRadar), 1));
+      insert(new Accion(Accion.AVANZAR, ($victimaEscaneada.getDistance()-120), 1));
+end
+
+rule "Alvo na mira"
+   when
+      $status : EstadoRobot()
+      Victima ($nombreVictima: nombre)
+      ScannedRobotEvent(name == $nombreVictima, $anguloRelativoVictima: bearing)                       
+      eval (Math.abs($anguloRelativoVictima - Auxiliar.anguloRelativo($status.getHeading(), $status.getGunHeading())) <= 2)   
+   then
+      insert(new Accion(Accion.DISPARAR, Math.min(Rules.MAX_BULLET_POWER, 0.10*$status.getEnergy()), 1));
+      System.out.println("Alvo "+$nombreVictima+" no gatilho!");
+end
+
+rule "Sem alvo ainda, pegue o primeiro"
+when
+	not (exists Victima())
+	$victimaEscaneada: ScannedRobotEvent()
+	$status: EstadoRobot()
+then
+    Victima victima = new Victima();
+      double anguloAbsoluto = Auxiliar.anguloAbsoluto($status.getHeading(), $victimaEscaneada.getBearing());
+      victima.setNombre($victimaEscaneada.getName());
+      victima.setX(Auxiliar.calcularX($status.getX(), anguloAbsoluto, $victimaEscaneada.getDistance()));                                            
+      victima.setY(Auxiliar.calcularX($status.getY(), anguloAbsoluto, $victimaEscaneada.getDistance()));
+      victima.setDistancia($victimaEscaneada.getDistance());
+      insert(victima);
+      
+      insert(new Accion(Accion.BROADCAST, new EnemySpotted(victima.getNombre(), victima.getX(), victima.getY()), 1));
+      
+      insert(new Accion(Accion.GIRAR_TANQUE_DER, $victimaEscaneada.getBearing(), 1));
+      double anguloRelativoCanon = Auxiliar.anguloRelativo($status.getHeading(), $status.getGunHeading()); 
+      insert(new Accion(Accion.GIRAR_CANON_DER, ($victimaEscaneada.getBearing() - anguloRelativoCanon), 1));
+      double anguloRelativoRadar =  Auxiliar.anguloRelativo($status.getHeading(), $status.getRadarHeading());  
+      insert(new Accion(Accion.GIRAR_RADAR_DER, ($victimaEscaneada.getBearing() - anguloRelativoRadar), 1));
+      insert(new Accion(Accion.AVANZAR, ($victimaEscaneada.getDistance()-120), 1));    
+end
+
+rule "Quando n‹o existir v’tima e uma mensagem de detec‹o de inimigo -> v’tima Ž esse inimigo"
+when
+	not (exists Victima())
+	$enemyMessage: EnemySpotted($enemyName: enemyName != null)
+then
+    Victima victima = new Victima();
+    victima.setNombre($enemyName);
+    insert(victima);
+    //System.out.println("RODOU!!");
+end
+
+rule "O alvo foi destru’do"
+when
+   $victima: Victima ($nombreVictima: nombre)
+   RobotDeathEvent( name == $nombreVictima )
+then 
+   retract($victima);
+   System.out.println("Menos um!");
+end
+
+rule "Bateu no muro"
+when
+   HitWallEvent($anguloRelativo: bearing)
+then
+   insert(new Accion(Accion.GIRAR_TANQUE_DER, (- $anguloRelativo), 5));
+   insert(new Accion(Accion.AVANZAR, 100, 5));
+end
+
+rule "Bateu no alvo"
+when
+   HitRobotEvent($nombre: name, $anguloRelativo: bearing)
+   Victima(nombre == $nombre)
+then
+   insert(new Accion(Accion.RETROCEDER, 100, 5));
+end
+
+rule "Bateu em outro rob™"
+when
+   HitRobotEvent($nombre: name, $anguloRelativo: bearing)
+   (or (not (exists Victima()))
+       (Victima(nombre != $nombre)))
+then
+   insert(new Accion(Accion.GIRAR_TANQUE_DER, (- $anguloRelativo*1.50), 5));
+   insert(new Accion(Accion.AVANZAR, 100, 5));
+end
+
